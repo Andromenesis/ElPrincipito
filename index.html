@@ -1,0 +1,886 @@
+<!DOCTYPE html>
+<html lang="en">
+
+<head>
+  <meta charset="UTF-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1.0">
+  <title>Three.js Animation</title>
+  <link rel="preconnect" href="https://fonts.googleapis.com">
+  <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
+  <link
+    href="https://fonts.googleapis.com/css2?family=Inter:ital,opsz,wght@0,14..32,100..900;1,14..32,100..900&display=swap"
+    rel="stylesheet">
+  <link rel="stylesheet" href="./style.css">
+  <script type="importmap">
+    {
+      "imports": {
+        "three": "https://cdn.jsdelivr.net/npm/three@v0.176.0/build/three.module.js",
+        "three/addons/": "https://cdn.jsdelivr.net/npm/three@v0.176.0/examples/jsm/"
+      }
+    }
+  </script>
+  <style>
+    body {
+      margin: 0;
+      overflow: hidden;
+      background-color: black;
+    }
+
+    canvas {
+      display: block;
+      width: 100vw;
+      height: 100vh;
+    }
+  </style>
+</head>
+
+<body>
+  <script type="module">
+    import * as THREE from 'three';
+    import { GLTFLoader } from 'three/addons/loaders/GLTFLoader.js';
+    import { DRACOLoader } from 'three/addons/loaders/DRACOLoader.js';
+    import { OrbitControls } from 'three/addons/controls/OrbitControls.js';
+    import { RoomEnvironment } from 'three/addons/environments/RoomEnvironment.js';
+    import { ImprovedNoise } from 'three/addons/math/ImprovedNoise.js';
+    import { Matrix4, Vector3 } from 'three';
+    import { getFresnelMat } from './getFresnelMat.js';
+
+    // Crear la escena principal y la escena de estrellas
+    const scene = new THREE.Scene();
+    const starScene = new THREE.Scene();
+
+    // Crear el renderer ANTES de usarlo
+    const renderer = new THREE.WebGLRenderer({ antialias: true });
+    renderer.setSize(window.innerWidth, window.innerHeight);
+    document.body.appendChild(renderer.domElement);
+
+    // Crear la cámara (añadir esto)
+    const camera = new THREE.PerspectiveCamera(
+      60, // FOV
+      window.innerWidth / window.innerHeight, // aspect
+      0.1, // near
+      1000 // far
+    );
+    camera.position.set(0, 60, 180);
+    scene.add(camera);
+
+    // Orthographic camera para el efecto de zoom
+    let orthoCamera = null;
+    let useOrthoCamera = false;
+
+    let planetaActual = 0; // 0: zorro, 1: borracho
+
+    function createOrthoCamera(targetPosition) {
+      const aspect = window.innerWidth / window.innerHeight;
+      const d = 70; // Ajusta el zoom ortográfico si lo necesitas
+      orthoCamera = new THREE.OrthographicCamera(
+        -d * aspect, d * aspect, d, -d, 0.1, 1000
+      );
+      orthoCamera.position.copy(targetPosition.clone().add(new THREE.Vector3(0, 0, 80)));
+      orthoCamera.lookAt(targetPosition);
+      orthoCamera.up.set(0, 1, 0);
+      orthoCamera.updateProjectionMatrix();
+    }
+
+    function enfocarPlanetaPorId(id) {
+      const planeta = planets.find(p => p.userData.id === id);
+      if (!planeta) return;
+      // Usar cámara perspective:
+      const offset = new THREE.Vector3(0, 0, 80); // Ajusta la distancia si lo deseas
+      camera.position.copy(planeta.position.clone().add(offset));
+      camera.lookAt(planeta.position);
+      controls.target.copy(planeta.position);
+      controls.update();
+    }
+
+    function enfocarParDePlanetas(idA, idB) {
+      const planetaA = planets.find(p => p.userData.id === idA);
+      const planetaB = planets.find(p => p.userData.id === idB);
+      if (planetaA && planetaB) {
+        const mid = planetaA.position.clone().add(planetaB.position).multiplyScalar(0.5);
+        const center = new THREE.Vector3(0, 0, 0);
+        const dir = mid.clone().sub(center).normalize();
+
+        // Define el umbral de pantalla grande (ajusta a tu gusto)
+        const LARGE_SCREEN_WIDTH = 1200;
+        const LARGE_SCREEN_HEIGHT = 800;
+
+        let distancia;
+        if (window.innerWidth >= LARGE_SCREEN_WIDTH && window.innerHeight >= LARGE_SCREEN_HEIGHT) {
+          // Pantalla grande: usa la lógica clásica (más cerca)
+          distancia = mid.distanceTo(center) + 60;
+        } else {
+          // Pantalla pequeña: usa la lógica responsive (más lejos)
+          distancia = getResponsiveDistancia(220);
+        }
+
+        const camPos = dir.multiplyScalar(distancia);
+        camera.position.copy(camPos);
+        camera.lookAt(mid);
+        controls.target.copy(mid);
+        controls.update();
+      }
+    }
+
+    // --- MEJORAS DE RENDER Y ENTORNO ---
+    // Usar RoomEnvironment para reflejos realistas y compatibilidad total
+    const pmremGenerator = new THREE.PMREMGenerator(renderer);
+    const environment = new RoomEnvironment();
+    const envMap = pmremGenerator.fromScene(environment).texture;
+    scene.environment = envMap;
+    scene.background = null; // Mantenemos el fondo de estrellas
+
+    renderer.setPixelRatio(window.devicePixelRatio);
+    renderer.shadowMap.enabled = true;
+    renderer.shadowMap.type = THREE.PCFSoftShadowMap;
+    document.body.appendChild(renderer.domElement);
+
+    // Crear un plano para el suelo
+    const ground = new THREE.Mesh(
+      // new THREE.PlaneGeometry(200, 200),
+      // new THREE.MeshPhongMaterial({ color: 0x333333, depthWrite: false })
+    );
+    ground.rotation.x = -Math.PI / 2;
+    ground.receiveShadow = true;
+    scene.add(ground);
+
+    // Añadir luz ambiental
+    const ambientLight = new THREE.AmbientLight(0x404040, 0.5); // Menos intensa para más contraste
+    scene.add(ambientLight);
+
+    // Añadir luz direccional
+    const sunLight = new THREE.DirectionalLight(0xfff7b2, 3.0); // Luz cálida y fuerte
+    sunLight.position.set(-80, 0, 40); // Igual que el sol visual
+    sunLight.castShadow = true;
+    sunLight.shadow.mapSize.width = 2048;
+    sunLight.shadow.mapSize.height = 2048;
+    sunLight.shadow.bias = -0.0005;
+    sunLight.target.position.set(0, 0, 0);
+    scene.add(sunLight.target);
+    scene.add(sunLight);
+
+    const sunPointLight = new THREE.PointLight(0xfff7b2, 1.0, 500);
+    sunPointLight.position.set(-100, 0, 50);
+    sunPointLight.castShadow = true;
+    sunPointLight.shadow.mapSize.width = 1024;
+    sunPointLight.shadow.mapSize.height = 1024;
+    scene.add(sunPointLight);
+
+
+    // Crear un grupo para los planetas
+    const planetGroup = new THREE.Group();
+    scene.add(planetGroup);
+
+    const distanciaEntrePlanetas = 80; // Distancia deseada entre planetas adyacentes
+    let orbitRadius = 60; // Radio de la órbita, será recalculado
+
+    // Velocidad orbital
+    const orbitSpeed = 0.01;
+
+    //Estrellas
+
+    var canvas = document.createElement('CANVAS');
+    canvas.width = 128;
+    canvas.height = 128;
+
+    var context = canvas.getContext('2d');
+    context.globalAlpha = 0.3;
+    context.fillStyle = 'white';
+    context.beginPath();
+    context.arc(64, 64, 40, 0, 2 * Math.PI);
+    context.fill();
+    context.globalAlpha = 1;
+    context.fillStyle = 'white';
+    context.beginPath();
+    context.arc(64, 64, 16, 0, 2 * Math.PI);
+    context.fill();
+
+    var texture = new THREE.CanvasTexture(canvas);
+
+    const N = 3000;
+    var perlin = new ImprovedNoise();
+
+    // Genera posiciones aleatorias para las estrellas en una esfera grande
+    const getRandomParticlePos = (particleCount) => {
+      const arr = new Float32Array(particleCount * 3);
+      const radius = 200; // Puedes ajustar el radio para alejar/acercar las estrellas
+      for (let i = 0; i < particleCount; i++) {
+        // Distribución uniforme en una esfera
+        const u = Math.random();
+        const v = Math.random();
+        const theta = 2 * Math.PI * u;
+        const phi = Math.acos(2 * v - 1);
+        const r = radius * Math.cbrt(Math.random()); // Distribución volumétrica
+
+        const x = r * Math.sin(phi) * Math.cos(theta);
+        const y = r * Math.sin(phi) * Math.sin(theta);
+        const z = r * Math.cos(phi);
+
+        arr[i * 3] = x;
+        arr[i * 3 + 1] = y;
+        arr[i * 3 + 2] = z;
+      }
+      return arr;
+    };
+
+    // Genera posiciones aleatorias para las estrellas en un cubo de tamaño 10
+
+    var geometry = new THREE.BufferGeometry();
+    geometry.setAttribute(
+      "position",
+      new THREE.BufferAttribute(getRandomParticlePos(N), 3)
+    );
+
+    // Si quieres mantener los colores aleatorios, puedes agregar este bloque:
+    const color = new Float32Array(N * 3);
+    for (let i = 0; i < N; i++) {
+      const c = new THREE.Color();
+      c.setHSL(0.5 + 0.15 * Math.random(), 0.5 + 0.5 * Math.random(), Math.random());
+      color[i * 3] = c.r;
+      color[i * 3 + 1] = c.g;
+      color[i * 3 + 2] = c.b;
+    }
+    geometry.setAttribute('color', new THREE.BufferAttribute(color, 3));
+
+    var material = new THREE.PointsMaterial({
+      color: 'white',
+      vertexColors: true,
+      size: 0.4, // Más grandes
+      sizeAttenuation: true,
+      map: texture,
+      transparent: false, // No transparencia
+      blending: THREE.NormalBlending, // Sin aditivo
+      depthTest: false,
+      depthWrite: false,
+    });
+    var cloud = new THREE.Points(geometry, material);
+    cloud.renderOrder = -1; // Asegura que las estrellas se rendericen detrás de otros objetos
+    starScene.add(cloud);
+
+    //Avión
+
+    // Variables para animar el avión y la hélice
+    let airplane;
+    let airplanePropeller = null;
+    let airplaneCurve = null;
+    let airplaneCurveProgress = 0;
+    const airplaneCurveSpeed = 0.0007;
+    const airplaneLoader = new GLTFLoader();
+    airplaneLoader.load('recursos/airplane.glb', (gltf) => {
+      airplane = gltf.scene;
+      airplane.rotation.x = Math.PI / 2;
+      airplane.scale.set(1, 1, 1);
+      // --- MEJORAR MATERIALES DEL AVIÓN ---
+      airplane.traverse((child) => {
+        if (child.isMesh) {
+          // Buscar la hélice
+          if (child.name === 'prop_Material002_0') {
+            airplanePropeller = child;
+          }
+          // Material físico
+          const map = child.material && child.material.map ? child.material.map : null;
+          const color = child.material && child.material.color ? child.material.color : new THREE.Color(0xffffff);
+          child.material = new THREE.MeshPhysicalMaterial({
+            map: map,
+            color: color,
+            roughness: 1.0,
+            metalness: 0.1,
+            clearcoat: 0.5,
+            clearcoatRoughness: 0.1,
+            envMapIntensity: 0.0,
+          });
+          child.castShadow = true;
+          child.receiveShadow = true;
+        }
+      });
+      airplane.position.set(0, 20, 0);
+      scene.add(airplane);
+      if (airplaneCurve) {
+        const pos = airplaneCurve.getPointAt(0);
+        airplane.position.copy(pos);
+      }
+    });
+
+    function updateAirplaneCurve() {
+      if (planets.length > 1) {
+        // Calcula el radio máximo de los planetas (suponiendo escala uniforme)
+        const maxPlanetRadius = Math.max(...planets.map(p => p.scale.x * 0.5));
+        const airplaneMargin = 6; // Ajusta este margen si el avión sigue tocando los planetas
+        const N = planets.length;
+        const ellipseA = orbitRadius * 1.3 + maxPlanetRadius + airplaneMargin;
+        const ellipseB = orbitRadius * 0.7 + maxPlanetRadius + airplaneMargin;
+        const time = performance.now() * 0.0005;
+        const inclination = THREE.MathUtils.degToRad(25 + 15 * Math.sin(time));
+        const yOffset = 25;
+
+        const points = planets.map((planet, i) => {
+          const angle = planet.userData.angle;
+          // Usa el mismo radio elíptico que la curva del avión
+          return getOrbitalPosition(angle, 1, 0, ellipseA, ellipseB, yOffset)
+        });
+        points.push(points[0].clone());
+        airplaneCurve = new THREE.CatmullRomCurve3(points, true, 'catmullrom', 0.5);
+      }
+    }
+
+    // --- SELECTIVE BLOOM SETUP ---
+    const BLOOM_LAYER = 1; // Objetos con bloom
+    const ENTIRE_SCENE = 0; // Objetos normales
+
+    // Helper para asignar layer recursivamente
+    function setLayerRecursive(obj, layer) {
+      obj.traverse(child => {
+        if (child.isMesh || child.isGroup) {
+          child.layers.set(layer);
+        }
+      });
+    }
+
+    // Cargar el planeta central
+    const centralPlanetLoader = new GLTFLoader();
+    let prince = null; // Fuera de cualquier función
+    centralPlanetLoader.load('recursos/asteroide.glb', (gltf) => {
+      const centralPlanet = gltf.scene;
+      centralPlanet.scale.set(10, 10, 10); // Ajusta el tamaño del planeta central
+      centralPlanet.position.set(0, 0, 0); // Coloca el planeta en el centro
+
+      // Cargar el principito y hacerlo hijo del planeta
+      const princeLoader = new GLTFLoader();
+
+      // Dentro del loader del principito:
+      princeLoader.load('recursos/little_prince.glb', (princeGltf) => {
+        prince = princeGltf.scene;
+        prince.scale.set(0.15, 0.15, 0.15); // Ajusta la escala según sea necesario
+        prince.position.set(0, 1, 0); // Justo encima del planeta (ajusta Y si es necesario)
+        centralPlanet.add(prince);
+        scene.add(centralPlanet);
+
+        // Espera a que el modelo esté en la escena para obtener su posición global
+        prince.updateWorldMatrix(true, false);
+        const princeWorldPosition = new THREE.Vector3();
+        prince.getWorldPosition(princeWorldPosition);
+        camera.lookAt(princeWorldPosition);
+
+        // Si los controles ya existen:
+        if (typeof controls !== "undefined") {
+          controls.target.copy(princeWorldPosition);
+          controls.update();
+        }
+      });
+      /* const axesHelper = new THREE.AxesHelper(20);
+       centralPlanet.add(axesHelper); // Añadir ejes al planeta central*/
+
+    });
+
+    const planetConfigs = [
+      { path: 'recursos/pixel_planet_kepler-37-b.glb', scale: 0.008, id: 'Planeta-hombre-faro', nombre: 'Hombre del Faro' },
+      { path: 'recursos/splanet.glb', scale: 0.020, id: 'Planeta-hombre-negocios', nombre: 'Hombre de Negocios' },
+      { path: 'recursos/pixel_planet_kepler-186-f.glb', scale: 0.008, id: 'Planeta-rey', nombre: 'Rey' },
+      { path: 'recursos/pixel_planet_trappist-1-e.glb', scale: 0.008, id: 'Planeta-zorro', nombre: 'Zorro', videoUrl: 'https://view.genially.com/682cf5491a81ec2a70346905' },
+      { path: 'recursos/pixel_planet_planet-nine.glb', scale: 0.008, id: 'Planeta-contador', nombre: 'Contador' },
+      { path: 'recursos/pixel_planet_kepler-7b.glb', scale: 0.008, id: 'Planeta-borracho', nombre: 'Borracho' },
+      { path: 'recursos/fantasy_ringed_planet.glb', scale: 0.025, id: 'Planeta-vanidoso', nombre: 'Vanidoso' }
+    ];
+
+    const loader = new GLTFLoader();
+    planetConfigs.forEach((cfg, i) => {
+      const angle = (2 * Math.PI * i) / planetConfigs.length;
+      loadPlanet(loader, cfg.path, cfg.scale, angle, cfg.id, cfg.nombre);
+    });
+
+    // Cargar el sol 
+    const sunLoader = new GLTFLoader();
+    sunLoader.load('recursos/sun.glb', (gltf) => {
+      const sun = gltf.scene;
+      sun.scale.set(4, 4, 4);
+      sun.position.set(-150, 0, 90);
+      // --- MEJORAR MATERIAL DEL SOL ---
+      sun.traverse((child) => {
+        if (child.isMesh && child.material) {
+          child.material = new THREE.MeshPhysicalMaterial({
+            color: 0xfff7b2,
+            emissive: 0xffe066,
+            emissiveIntensity: 1.0,
+            roughness: 0.1,
+            metalness: 0.3,
+            envMapIntensity: 0.7,
+          });
+          child.castShadow = false;
+          child.receiveShadow = false;
+        }
+      });
+      // ATMÓSFERA GLOW
+      const fresnelMat = getFresnelMat({ rimHex: 0xffe066, facingHex: 0x000000 }); // Amarillo solar
+      const glowGeometry = new THREE.SphereGeometry(1, 32, 32);
+      const glowMesh = new THREE.Mesh(glowGeometry, fresnelMat);
+      glowMesh.scale.set(10, 10, 10);
+      sun.add(glowMesh);
+
+      scene.add(sun);
+    });
+
+    // --- ATMÓSFERA GLOBAL AZUL (FRESNEL, SOLO BORDES) ---
+    const skyGeometry = new THREE.SphereGeometry(90, 64, 64); // Más grande que las estrellas
+    const skyFresnelMat = getFresnelMat({
+      rimHex: 0x000000, // Azul
+      facingHex: 0x0088ff,
+      minAlpha: 0.85 // Centro sólido, borde fuerte
+    });
+
+    const skyMesh = new THREE.Mesh(skyGeometry, skyFresnelMat);
+    skyMesh.material.side = THREE.BackSide;
+    scene.add(skyMesh);
+
+    // Crear un arreglo para almacenar los planetas
+    const planets = [];
+    // Mapear nombre de archivo a modelo para acceso rápido
+    const planetByFile = {};
+
+
+    // Función para cargar un modelo y añadirlo al grupo
+    function loadPlanet(loader, path, scaleFactor, initialAngle, id = null, nombre = null) {
+      loader.load(path, (gltf) => {
+        const model = gltf.scene;
+        let calculatedScale = Math.min(window.innerWidth, window.innerHeight) * scaleFactor;
+        calculatedScale = Math.max(1, Math.min(calculatedScale, 50));
+        model.scale.set(calculatedScale, calculatedScale, calculatedScale);
+
+        // Asigna el id si se proporciona
+        if (id) {
+          model.userData.id = id;
+        }
+        if (nombre) {
+          model.userData.nombre = nombre;
+        }
+
+        // Guarda el ángulo inicial solo una vez
+        model.userData.angle = initialAngle;
+        // Guarda el scaleFactor para recalcular en updatePlanets
+        model.userData.scaleFactor = scaleFactor;
+
+        // Mejora materiales
+        model.traverse((child) => {
+          if (child.isMesh && child.material) {
+            const map = child.material.map || null;
+            const color = child.material.color ? child.material.color : new THREE.Color(0xffffff);
+            child.material = new THREE.MeshPhysicalMaterial({
+              map: map,
+              color: color,
+              roughness: 1.0,
+              metalness: 0.1,
+              clearcoat: 0.3,
+              clearcoatRoughness: 0.2,
+              envMapIntensity: 0.0,
+              transmission: 0.0,
+              ior: 1.45,
+            });
+            child.castShadow = true;
+            child.receiveShadow = true;
+          }
+        });
+
+        planetGroup.add(model);
+        planets.push(model);
+        planetByFile[path] = model;
+
+        // Solo actualiza la curva y posiciones si todos los planetas han sido cargados
+        if (planets.length === planetConfigs.length) {
+          updateAirplaneCurve();
+          updatePlanets();
+        }
+      });
+    }
+
+
+
+    /*Bloque para recalcular las escalas y posiciones de los planetas*/
+
+
+    // Función para recalcular las escalas y posiciones de los planetas
+    function updatePlanets() {
+      const newWidth = window.innerWidth;
+      const newHeight = window.innerHeight;
+      const N = planetGroup.children.length;
+
+      // Calcula el radio para que la distancia entre planetas sea la deseada
+      orbitRadius = distanciaEntrePlanetas / (2 * Math.sin(Math.PI / N));
+
+      planetGroup.children.forEach((planet, index) => {
+        // Recalcular la escala
+        const scaleFactor = planets[index]?.userData?.scaleFactor || 0.01;
+        const calculatedScale = Math.min(newWidth, newHeight) * scaleFactor;
+        planet.scale.set(calculatedScale, calculatedScale, calculatedScale);
+
+        let customOrbitRadius = orbitRadius;
+        // Si es el sol, puedes mantenerlo aparte si lo deseas
+        if (planet.userData.id === 'sun') {
+          customOrbitRadius = orbitRadius * 1.5;
+        }
+
+        const angle = planet.userData.angle;
+
+        // --- ÓRBITA ELÍPTICA ---
+        const ellipseA = customOrbitRadius * 1.3;
+        const ellipseB = customOrbitRadius * 0.7;
+        const basePosition = new THREE.Vector3(ellipseA, 0, 0);
+
+        // Quaternion para la órbita
+        const q = new THREE.Quaternion();
+        q.setFromAxisAngle(new THREE.Vector3(0, 1, 0), angle);
+
+        // --- ANIMAR INCLINACIÓN ---
+        const time = performance.now() * 0.0005;
+        const inclination = THREE.MathUtils.degToRad(25 + 15 * Math.sin(time));
+        const inclinationQ = new THREE.Quaternion();
+        inclinationQ.setFromAxisAngle(new THREE.Vector3(1, 0, 0), inclination);
+
+        // Combina la inclinación con la órbita
+        const finalQ = q.clone().premultiply(inclinationQ);
+
+        const rotatedPosition = basePosition.clone().applyQuaternion(finalQ);
+        rotatedPosition.z *= ellipseB / ellipseA; // Corrige el eje menor para la elipse
+        planet.position.copy(rotatedPosition);
+
+
+        // Rotación sobre su propio eje usando quaternion
+        const selfRotQ = new THREE.Quaternion();
+        selfRotQ.setFromAxisAngle(new THREE.Vector3(0, 1, 0), 0.01);
+        planet.quaternion.premultiply(selfRotQ);
+      });
+      // Actualizar la curva del avión con las nuevas posiciones
+      updateAirplaneCurve();
+    }
+
+    /* Bloque para hacer la escena responsive */
+
+    // Manejar el redimensionamiento de la ventana
+    window.addEventListener('resize', () => {
+      const newWidth = window.innerWidth;
+      const newHeight = window.innerHeight;
+
+      // Actualizar el tamaño del renderizador
+      renderer.setSize(newWidth, newHeight);
+
+      // Actualizar la relación de aspecto de la cámara
+      camera.aspect = newWidth / newHeight;
+      camera.updateProjectionMatrix();
+
+      // Recalcular los planetas
+      updatePlanets();
+      updateAirplaneCurve(); // <-- Añadido aquí
+
+      // Reenfoca el par actual si estás en el menú de planetas
+      if (planetPairs && typeof currentPairIndex !== 'undefined') {
+        const [idA, idB] = planetPairs[currentPairIndex];
+        enfocarParDePlanetas(idA, idB);
+      }
+    });
+
+    function getResponsiveDistancia(baseDistancia = 80) {
+      // Puedes ajustar los factores según tu escena
+      const minWidth = 800; // ancho mínimo de referencia
+      const minHeight = 600; // alto mínimo de referencia
+      const width = window.innerWidth;
+      const height = window.innerHeight;
+      // Si la pantalla es más pequeña que la referencia, aumenta la distancia
+      const widthFactor = Math.max(1, minWidth / width);
+      const heightFactor = Math.max(1, minHeight / height);
+      // Usa el mayor factor para asegurar que ambos ejes estén cubiertos
+      const factor = Math.max(widthFactor, heightFactor);
+      return baseDistancia * factor;
+    }
+
+    // --- SELECTIVE BLOOM RENDERING ---
+    // Guardar materiales originales para restaurar
+    const materials = {};
+    const darkMaterial = new THREE.MeshBasicMaterial({ color: 'black' });
+
+    function darkenNonBloomed(obj) {
+      obj.traverse((child) => {
+        if (child.isMesh && child.layers.test(new THREE.Layers().set(BLOOM_LAYER)) === false) {
+          materials[child.uuid] = child.material;
+          child.material = darkMaterial;
+        }
+      });
+    }
+    function restoreMaterial(obj) {
+      obj.traverse((child) => {
+        if (child.isMesh && materials[child.uuid]) {
+          child.material = materials[child.uuid];
+          delete materials[child.uuid];
+        }
+      });
+    }
+
+    // Postprocesado bloom
+    import { EffectComposer } from 'three/addons/postprocessing/EffectComposer.js';
+    import { RenderPass } from 'three/addons/postprocessing/RenderPass.js';
+    import { UnrealBloomPass } from 'three/addons/postprocessing/UnrealBloomPass.js';
+
+    const composer = new EffectComposer(renderer);
+    // RenderPass de estrellas: limpia el fondo
+    const starPass = new RenderPass(starScene, camera);
+    starPass.clear = true;
+    composer.addPass(starPass);
+    // RenderPass de la escena principal: NO limpia el fondo
+    const mainPass = new RenderPass(scene, camera);
+    mainPass.clear = false;
+    composer.addPass(mainPass);
+    const bloomPass = new UnrealBloomPass(new THREE.Vector2(window.innerWidth, window.innerHeight), 1.2, 0.4, 0.85);
+    bloomPass.threshold = 0.1;
+    bloomPass.strength = 0.3;
+    bloomPass.radius = 0.7;
+    composer.addPass(bloomPass);
+
+    // Asegura que el fondo de la escena principal sea transparente
+    scene.background = null;
+
+    // --- CONTROL DE PAUSA ---
+    let animacionActiva = true;
+
+    function pausarAnimacion() {
+      animacionActiva = false;
+      controls.enabled = false;
+    }
+    function reanudarAnimacion() {
+      animacionActiva = true;
+      controls.enabled = true;
+      enfocarPrincipito();
+    }
+
+    const controls = new OrbitControls(camera, renderer.domElement);
+
+    // Modifica animate para que solo la órbita se pause
+    function animate() {
+      requestAnimationFrame(animate);
+      // Actualizar la posición de cada planeta en el grupo
+      planetGroup.children.forEach((planet, index) => {
+        if (animacionActiva) {
+          planet.userData.angle += orbitSpeed;
+        }
+        let customOrbitRadius = orbitRadius;
+        if (planet.userData.id === 'sun') {
+          customOrbitRadius = orbitRadius * 1.5;
+        }
+        const angle = planet.userData.angle;
+        planet.position.set(
+          customOrbitRadius * Math.cos(planet.userData.angle),
+          0,
+          customOrbitRadius * Math.sin(planet.userData.angle)
+        );
+        const selfRotQ = new THREE.Quaternion();
+        selfRotQ.setFromAxisAngle(new THREE.Vector3(0, 1, 0), 0.01);
+        planet.quaternion.premultiply(selfRotQ);
+      });
+
+      // Animar el avión siguiendo la curva
+      if (airplane && airplaneCurve) {
+        airplaneCurveProgress += airplaneCurveSpeed;
+        if (airplaneCurveProgress > 1) airplaneCurveProgress = 0;
+        const pos = airplaneCurve.getPointAt(airplaneCurveProgress);
+        airplane.position.copy(pos);
+        // Calcular el siguiente punto para la dirección
+        const nextProgress = (airplaneCurveProgress + 0.01) % 1;
+        const nextPos = airplaneCurve.getPointAt(nextProgress);
+        // Hacer que la nariz del avión apunte hacia el siguiente punto
+        airplane.lookAt(nextPos);
+        if (airplanePropeller) {
+          airplanePropeller.rotation.z -= 1.0;   // Ajusta la velocidad de rotación de la hélice
+        }
+      }
+
+      // Renderiza con postprocesado
+      composer.render(useOrthoCamera && orthoCamera ? orthoCamera : camera);
+      mostrarPlanetasCercanos();
+    }
+
+    animate();
+
+    // Añadir controles de órbita
+    controls.target.set(0, 0.5, 0);
+    controls.update();
+    controls.enablePan = false;
+    controls.enableDamping = true;
+
+
+    /*Sección de eventos de para la camara*/
+
+    // Evento para pausar al hacer click en el h3
+    const h3 = document.querySelector('.info-central h3');
+    h3.addEventListener('click', () => {
+      enfocarParDePlanetas('Planeta-zorro', 'Planeta-contador');
+      // (Opcional) Pausar/reanudar animación si lo deseas:
+      if (animacionActiva) {
+        pausarAnimacion();
+      } else {
+        reanudarAnimacion();
+        enfocarPrincipito();
+      }
+      // Mostrar/ocultar botones si lo necesitas
+      const btnIzq = document.querySelector('.contenedor-boton-izquierdo');
+      const btnDer = document.querySelector('.contenedor-boton-derecho');
+      btnIzq?.classList.toggle('mostrar');
+      btnDer?.classList.toggle('mostrar');
+
+      // Flechas de navegación
+      const flechaIzq = document.querySelector('.Boton-izquierdo-escenario-planetas');
+      const flechaDer = document.querySelector('.Boton-derecho-escenario-planetas');
+      flechaIzq?.classList.toggle('mostrar');
+      flechaDer?.classList.toggle('mostrar');
+    });
+
+    document.querySelector('.Boton-derecho-escenario-planetas')?.addEventListener('click', () => {
+      currentPairIndex = (currentPairIndex + 1) % planetPairs.length;
+      const [idA, idB] = planetPairs[currentPairIndex];
+      enfocarParDePlanetas(idA, idB);
+    });
+
+    document.querySelector('.Boton-izquierdo-escenario-planetas')?.addEventListener('click', () => {
+      currentPairIndex = (currentPairIndex - 1 + planetPairs.length) % planetPairs.length;
+      const [idA, idB] = planetPairs[currentPairIndex];
+      enfocarParDePlanetas(idA, idB);
+    });
+
+
+
+    let masCercanos = [];
+
+    function mostrarPlanetasCercanos() {
+      if (planets.length < 2) return;
+
+      // Calcula la distancia de cada planeta a la cámara
+      const distancias = planets.map(planet => ({
+        planet,
+        distancia: camera.position.distanceTo(planet.position)
+      }));
+
+      // Ordena por distancia ascendente
+      distancias.sort((a, b) => a.distancia - b.distancia);
+
+      // Toma los dos más cercanos
+      masCercanos = distancias.slice(0, 2); // <-- aquí la haces global
+
+      // Obtiene los ids o nombres
+      const idIzquierdo = masCercanos[0].planet.userData.nombre || masCercanos[0].planet.userData.id || 'Planeta';
+      const idDerecho = masCercanos[1].planet.userData.nombre || masCercanos[1].planet.userData.id || 'Planeta';
+
+      // Muestra en los elementos <a>
+      const btnIzquierdo = document.getElementById('ir-btn-izquierdo');
+      const btnDerecho = document.getElementById('ir-btn-derecho');
+      if (btnIzquierdo) btnIzquierdo.textContent = idIzquierdo;
+      if (btnDerecho) btnDerecho.textContent = idDerecho;
+    }
+
+    document.getElementById('ir-btn-izquierdo')?.addEventListener('click', () => {
+      if (masCercanos.length > 0) {
+        const id = masCercanos[0].planet.userData.id;
+        mostrarVideoDePlaneta(id);
+      }
+    });
+    document.getElementById('ir-btn-derecho')?.addEventListener('click', () => {
+      if (masCercanos.length > 1) {
+        const id = masCercanos[1].planet.userData.id;
+        mostrarVideoDePlaneta(id);
+      }
+    });
+
+    const planetPairs = [
+      ['Planeta-zorro', 'Planeta-contador'],
+      ['Planeta-hombre-negocios', 'Planeta-rey'],
+      ['Planeta-borracho', 'Planeta-vanidoso'],
+      // ...agrega más pares si lo deseas
+    ];
+    let currentPairIndex = 0;
+
+    function getOrbitalPosition(angle, orbitRadius, inclination, ellipseA = 1, ellipseB = 1, yOffset = 0) {
+      // Elipse en XZ
+      const basePosition = new THREE.Vector3(ellipseA * orbitRadius, 0, 0);
+      // Rotación alrededor de Y (ángulo orbital)
+      const q = new THREE.Quaternion();
+      q.setFromAxisAngle(new THREE.Vector3(0, 1, 0), angle);
+      // Inclinación de la órbita
+      const inclinationQ = new THREE.Quaternion();
+      inclinationQ.setFromAxisAngle(new THREE.Vector3(1, 0, 0), inclination);
+      // Combina
+      const finalQ = q.clone().premultiply(inclinationQ);
+      const pos = basePosition.clone().applyQuaternion(finalQ);
+      pos.z *= ellipseB / ellipseA;
+      pos.y += yOffset;
+      return pos;
+    }
+
+    function enfocarPrincipito() {
+      if (!prince) return;
+      // Obtén la posición global del principito
+      prince.updateWorldMatrix(true, false);
+      const princeWorldPosition = new THREE.Vector3();
+      prince.getWorldPosition(princeWorldPosition);
+
+      // Dirección hacia donde mira el principito (por defecto eje Z positivo)
+      const forward = new THREE.Vector3(0, 0, 1);
+      forward.applyQuaternion(prince.quaternion);
+
+      // Ajusta la posición de la cámara (puedes modificar el offset si lo deseas)
+      const offset = forward.clone().multiplyScalar(-20).add(new THREE.Vector3(0, 10, 0));
+      camera.position.copy(princeWorldPosition.clone().add(offset));
+      camera.lookAt(princeWorldPosition);
+      controls.target.copy(princeWorldPosition);
+      controls.update();
+      controls.enabled = true; // Vuelve a habilitar los controles si lo deseas
+    }
+
+    function mostrarVideoDePlaneta(idPlaneta) {
+      const planeta = planetConfigs.find(cfg => cfg.id === idPlaneta);
+      if (planeta && planeta.videoUrl) {
+        const modal = document.getElementById('video-modal');
+        const iframe = document.getElementById('video-iframe');
+        iframe.src = planeta.videoUrl;
+        modal.style.display = 'flex';
+        // Oculta la UI principal
+        document.getElementById('ui-principal').classList.add('oculto');
+      }
+    }
+
+    document.getElementById('cerrar-video').onclick = function () {
+      document.getElementById('video-modal').style.display = 'none';
+      document.getElementById('video-iframe').src = '';
+      // Muestra la UI principal
+      document.getElementById('ui-principal').classList.remove('oculto');
+    };
+  </script>
+  <script src="script.js"></script>
+  <div id="ui-principal">
+    <div class="Boton-derecho-escenario-planetas"><span class="Icono-flecha-derecha"><img id="Flecha-derecha"
+          src="./recursos/flecha_derecha.png" alt="Flecha derecha">
+        </img>
+      </span></div>
+    <div class="Boton-izquierdo-escenario-planetas"><span class="Icono-flecha-izquierda"><img id="Flecha-izquierda"
+          src="./recursos/flecha_izquierda.png" alt="Flecha izquierda">
+        </img>
+      </span></div>
+    <div class="contenedor-general">
+      <div class="contenedor-menu">
+
+        <div class="contenedor-boton-izquierdo">
+          <button class="info-izquierda" id="seleccionar-planeta-izquierda"><a id="ir-btn-izquierdo"></a>
+          </button>
+        </div>
+        <div class="contenedor-texto-principal">
+          <div class="info-central">
+            <h3>A dónde quieres viajar?</h3>
+          </div>
+        </div>
+        <div class="contenedor-boton-derecho">
+          <button class="info-derecha"><a id="ir-btn-derecho"></a>
+          </button>
+        </div>
+      </div>
+    </div>
+  </div>
+  <div id="video-modal" class="contenedor-genially">
+    <iframe id="video-iframe" class="genially" allowfullscreen></iframe>
+    <button id="cerrar-video" class="cerrar-genially">✖</button>
+  </div>
+</body>
+
+</html>

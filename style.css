@@ -1,0 +1,234 @@
+.contenedor-general {
+  position: fixed;
+  bottom: 0;
+  width: 100%;
+  height: 20%;
+  backdrop-filter: blur(2px);
+  mask: linear-gradient(90deg, #0000007a, #000, #0000007a);
+  z-index: 10;
+}
+
+.contenedor-menu {
+  display: grid;
+  grid-template-columns: 1fr 2fr 1fr;
+  width: 100%;
+  height: 100%;
+  align-items: center;
+}
+
+@media (max-width: 965px) {
+  .contenedor-general {
+    height: 30%;
+  }
+
+  .contenedor-menu {
+    grid-template-columns: 1fr;
+    grid-template-rows: auto auto auto;
+    grid-auto-flow: row;
+    text-align: center;
+  }
+
+  .contenedor-texto-principal {
+    grid-column: 1;
+    grid-row: 1;
+    justify-content: center;
+    align-items: center;
+    width: 100%;
+    font-size: 1.2rem;
+  }
+
+  .contenedor-boton-izquierdo {
+    grid-column: 1;
+    grid-row: 2;
+    justify-content: center;
+    align-items: center;
+    width: 100%;
+  }
+
+  .contenedor-boton-derecho {
+    grid-column: 1;
+    grid-row: 3;
+    justify-content: center;
+    align-items: center;
+    width: 100%;
+  }
+
+  .info-central h3 {
+    font-size: 1.2rem;
+  }
+
+  button a {
+    font-size: 1.0rem;
+  }
+}
+
+
+#video-modal.contenedor-genially {
+  display: none;
+  position: fixed;
+  top: 0; left: 0;
+  width: 100vw; height: 100vh;
+  background: rgb(0 0 0 / 22%);
+  backdrop-filter: blur(2px);
+  z-index: 9999;
+  display: flex;
+  justify-content: center;
+  align-items: center;
+  flex-direction: column;
+  padding: 0;
+  box-sizing: border-box;
+}
+
+#video-modal.contenedor-genially[style*="display: flex"] {
+  display: flex !important;
+}
+
+#video-iframe.genially {
+  width: 90vw;
+  max-width: 1200px;
+  height: auto;
+  aspect-ratio: 16/9; /* Puedes ajustar esto si la mayoría de tus genially son 16:9 */
+  min-width: 320px;
+  border: none;
+  border-radius: 18px;
+  display: block;
+  margin: 0 auto;
+  background: #fff;
+}
+
+.cerrar-genially {
+  position: absolute;
+  top: 30px;
+  right: 40px;
+  font-size: 2rem;
+  z-index: 10000;
+  background: transparent;
+  color: #fff;
+  border: none;
+  cursor: pointer;
+}
+
+/* Responsive para móviles */
+@media (max-width: 700px) {
+  #video-iframe.genially {
+    width: 98vw;
+    height: 56vw; /* 16:9 ratio */
+    max-width: 100vw;
+    max-height: 40vh;
+    min-width: 180px;
+    min-height: 100px;
+  }
+}
+
+.contenedor-boton-izquierdo {
+  display: flex;
+  align-items: center;
+  justify-content: center;
+}
+
+.info-derecha {
+  color: white;
+  font-family: Inter, sans-serif;
+  font-size: 20px;
+  font-weight: 900;
+  border: none;
+  padding: 5px;
+  background: transparent;
+  display: inline;
+  outline: rgba(255, 255, 255, .6) solid 4px;
+  outline-offset: .2em;
+  border-radius: .2em;
+
+}
+
+.contenedor-texto-principal {
+  display: flex;
+  align-items: center;
+  justify-content: center;
+}
+
+.info-central {
+  color: white;
+  font-family: Inter, sans-serif;
+  font-size: 20px;
+  font-weight: bold;
+}
+
+.contenedor-boton-derecho {
+  display: flex;
+  align-items: center;
+  justify-content: center;
+}
+
+.info-izquierda {
+  color: white;
+  font-family: Inter, sans-serif;
+  font-size: 20px;
+  font-weight: 900;
+  border: none;
+  padding: 5px;
+  background: transparent;
+  display: inline;
+  outline: rgba(255, 255, 255, .6) solid 4px;
+  outline-offset: .2em;
+  border-radius: .2em;
+}
+
+/* Oculta los elementos con la clase al abrir el genially */
+.oculto {
+  display: none !important;
+}
+
+/* Oculta los botones pero mantiene el espacio en el grid */
+.contenedor-boton-izquierdo,
+.contenedor-boton-derecho {
+  visibility: hidden;
+  opacity: 0;
+  pointer-events: none;
+  transition: opacity 0.3s;
+}
+
+/* Al hacer hover en .info-central h3, muestra los botones */
+.info-central h3:hover~.contenedor-boton-izquierdo,
+.info-central h3:hover~.contenedor-boton-derecho,
+.contenedor-boton-izquierdo.mostrar,
+.contenedor-boton-derecho.mostrar {
+  visibility: visible;
+  opacity: 1;
+  pointer-events: auto;
+}
+
+/* Estilos para las flechas */
+
+.Boton-izquierdo-escenario-planetas {
+  position: absolute;
+  top: 50%;
+  left: 20px;
+  z-index: 10;
+}
+
+.Boton-derecho-escenario-planetas {
+  position: absolute;
+  top: 50%;
+  right: 20px;
+  z-index: 10;
+}
+
+/* Oculta las felchas */
+.Boton-izquierdo-escenario-planetas,
+.Boton-derecho-escenario-planetas {
+  visibility: hidden;
+  opacity: 0;
+  pointer-events: none;
+  transition: opacity 0.3s;
+}
+
+/* Al hacer hover en .info-central h3, muestra los botones */
+.info-central h3:hover~.Boton-izquierdo-escenario-planetas,
+.info-central h3:hover~.Boton-derecho-escenario-planetas,
+.Boton-izquierdo-escenario-planetas.mostrar,
+.Boton-derecho-escenario-planetas.mostrar {
+  visibility: visible;
+  opacity: 1;
+  pointer-events: auto;
+}
